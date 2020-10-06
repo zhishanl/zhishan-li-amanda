@@ -1,0 +1,840 @@
+---
+title: "STT481 Final Project"
+author: "Zhishan Li"
+date: "3/21/2020"
+output:
+  word_document:
+    toc: yes
+  html_document:
+    df_print: paged
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+---
+<style type="text/css">
+/* Title */
+h1.title {
+  color: #1C1C97;
+  font-weight: bold;
+}
+/* Level 1 header */
+h1 {
+  color: #1C1C97;
+}
+/* Level 2 header */
+h2 {
+  color: #76B5E5;
+}
+/* Table of contents */
+.list-group-item.active, .list-group-item.active:focus,
+.list-group-item.active:hover {
+    z-index: 2;
+    color: #fff;
+    background-color: #1C1C97;
+    border-color: #337ab7;
+}
+</style>
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+---
+
+
+*Note: I put the Kaggle score screenshots in a separate pdf file*
+
+```{r}
+# Packages that are used in the project
+library(ggplot2)
+library(ggpubr)
+#library(Rmisc)
+library(FNN)
+library(caret)
+library(dplyr)
+library(glmnet)
+library(MASS)
+library(leaps)
+library(pls)
+```
+
+**Below is the  bonus part: Preprocessing**
+
+## Introduction to the data and the problem{-}
+In this project, it is given 80 characteristics of nearly 1,500 houses that have been sold. Then, it is asking to predict the selling price of the house based on these characteristics. With the 79 explanatory variables describing (almost) every aspect of residential homes in Ames, Iowa, the project requires to predict the final price of each house. Below, there will be more details about how I preprocess the data and give more introduction about the data.
+
+
+## Explain the raw data{-}
+
+### Importing data{-} 
+```{r}
+train <- read.csv("train.csv")
+test <- read.csv("test.csv")
+```
+
+### Observation from the raw data{-}
+* Here, a relationship performance graph is created which is shown below. These are the relationship between sales price and all kinds of area. From the plots below, we can see that there are many outliers from the certain boundary. These outliers may be deleted during the data processing. At last, we also can observe that pool area has barely relationship with sales price. So, we can ignore that in our further study. 
+
+```{r}
+# Observation from graphs
+p1 <- subset(train, !is.na(GrLivArea))
+p2 <- subset(train, !is.na(LotArea))
+p3 <- subset(train, !is.na(LotFrontage))
+p4 <- subset(train, !is.na(GarageArea))
+p5 <- subset(train, !is.na(MasVnrArea))
+p6 <- subset(train, !is.na(PoolArea))
+
+p1 <- ggplot(p1, aes(GrLivArea, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+p2 <- ggplot(p2, aes(LotArea, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+p3 <- ggplot(p3, aes(LotFrontage, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+p4 <- ggplot(p4, aes(GarageArea, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+p5 <- ggplot(p5, aes(MasVnrArea, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+p6 <- ggplot(p6, aes(PoolArea, SalePrice)) + geom_point(size=0.5,alpha = 0.5) + theme_bw()
+
+ggarrange(p1, p2, p3, p4, p5, p6, ncol = 2, nrow = 3)
+```
+
+
+## Cleaning data{-}
+
+**Below, I will start removing outliers, filling missing values and etc, if any; also, each cleaning process includes a corresponding explanation on how I cleaned it.**
+
+
+### Removing outliers{-}
+* As it mentioned earlier, there are many outlier existing. So, there are some boxplots are created below for a deeper understanding on what kinds of outliers we are looking at. At this step, I am trying to move the outliers as many as possible. As observed, I defined that when _GrLivArea_ < 4000, _LotArea_ < 100000, _LotFrontage_ < 200, _GarageArea_ < 1250, _MasVnrArea_ < 1250 , these are not considered outliers.
+```{r}
+# plot boxplots for GrLivArea, lotArea, LotFrontage, GarageArea, MasVnrArea
+par(mfrow=c(2,3))
+boxplot(train$GrLivArea, xlab="GrLivArea")
+boxplot(train$LotArea, xlab="lotArea")
+boxplot(train$LotFrontage, xlab="LotFrontage")
+boxplot(train$GarageArea, xlab="GarageArea")
+boxplot(train$MasVnrArea, xlab="MasVnrArea")
+
+# remove some outliers
+training <- subset(train, GrLivArea < 4000 | is.na(GrLivArea))
+training <- subset(train, LotArea < 100000 | is.na(LotArea))
+training <- subset(train, LotFrontage < 200 | is.na(LotFrontage))
+training <- subset(train, GarageArea < 1250 | is.na(GarageArea))
+training <- subset(train, MasVnrArea < 1250 | is.na(MasVnrArea))
+```
+
+
+* Using _GrLivArea_ as an example, I believed that the area of the house should be one of the important factors that affect the _SalePrice_. Since then, for the graph below, we can classify the area of the house by neighborhood and observe its relationship with the _SalePrice_. As exceot, it tends to be has the positive correlation with _SalePrice_.
+
+```{r}
+# plotting 
+ggplot(training, aes(GrLivArea, SalePrice)) + geom_point(aes(color = Neighborhood)) + 
+    scale_x_continuous("GrLivArea") +
+    scale_y_continuous("SalePrice") +
+    theme_bw() + facet_wrap( ~ Neighborhood) + theme(legend.position="none")
+```
+
+
+* If we try to combine both training and testing dataset, we will find that there are two types of data: factor and string. Below, it tries to observe how many datas are belong to string and factor data. 
+
+* Moreover, after dealing witht he important predictors (which we think is important features), we are focus on the entire data set. Here, we can realize that in both train and test data set. They both get the missing values and some other fact that may affect our prediction. So, we are combining the test and train together. Since the test doesn't has the column _SalePrice_, so, we just give it a temporary value "NA". Then, we check the type of the predictors. 
+```{r}
+#unique(train$MiscFeature)
+#unique(test$MiscFeature)
+
+# if we try to combine both training and testing dataset
+test$SalePrice <- NA
+all <- rbind(train, test)
+res <- sapply(all, class )
+table(res)
+```
+
+```{r}
+all <- all %>% 
+  mutate(YrRemodel_Diff = YearRemodAdd - YearBuilt) 
+
+ggplot(data = all[all$SalePrice > 0,], aes(x = YrRemodel_Diff, y = SalePrice, group = YrRemodel_Diff)) +
+  geom_boxplot(na.rm = T) +
+  geom_smooth(na.rm = T) +
+  theme_minimal() +
+  labs(x = "Year Diff",
+       y = "Sales Price",
+       title = "Year Remodel Difference vs. Sales Price") +
+  scale_y_continuous(breaks = c(100000,200000,300000,400000,500000,600000,700000))
+```
+
+
+* Below I tried to find out how many missing values in each variable
+
+* From the value of the above variables, we can see that there are many variables in the dataset with missing values, so we need to deal with missing values first. By doing so, let's firstly sort by the proportion of missing values in each variable. 
+
+```{r}
+res <- sapply(all, function(x)  sum(is.na(x)) ) # Count missing values for all variables
+
+rate <- sapply(all, function(x) res/2909) # Sort by missing rate
+
+miss <- sort(res, decreasing=T)
+miss[miss>0]
+
+summary(all[,names(miss)[miss>0]])
+```
+
+
+* From above, we can see that there are lots of missing data. The more missing _PoolQC_, _MiscFeature_, _Alley_, _Fence_, and _FireplaceQu_ are due to the fact that the house does not have a swimming pool, special facilities, side lanes, fences, and fireolaces. Due to the large amount of missing, let us remove these variables directly.
+
+```{r}
+Drop <- names(all) %in% c("PoolQC","MiscFeature","Alley","Fence","FireplaceQu")
+all <- all[!Drop]
+```
+
+
+### Fill the missing values{-}
+
+* Now, let's use NA as a new factor
+
+By looking at the description file, we can see that the garage-related 5 variables: _GarageType_, _GarageYrBlt_, _GarageFinish_, _GarageQual_, _GarageCond_. These 5 variables are missing since the houses do not have garages. Similarly, the five variables, _BsmtExposure_, _BsmtFinType2_, _BsmtQual_, _BsmtCond_, and _BsmtFinType1_, are about the basement, and they are all missing because the house has no basement. However, since the number of such variables missings are relatively small, the missing values are only replaced by *Missing* here.
+
+Filling the NA value for the garage-related 5 variables: GarageType, GarageYrBlt, GarageFinish, GarageQual, GarageCond.
+```{r}
+Garage <- c("GarageType","GarageQual","GarageCond","GarageFinish")
+Bsmt <- c("BsmtExposure","BsmtFinType2","BsmtQual","BsmtCond","BsmtFinType1")
+for (x in c(Garage, Bsmt) ){
+  all[[x]] <- factor( all[[x]], levels= c(levels(all[[x]]),c('Missing')))
+  all[[x]][is.na(all[[x]])] <- "Missing"
+}
+```
+
+Since GarageYrBlt is the year of the garage, we replace this variable with the year of construction of the house.
+```{r}
+# Tidy GarageYrBlt separately
+all$GarageYrBlt[is.na(all$GarageYrBlt)] <- all$YearBuilt[is.na(all$GarageYrBlt)]
+```
+
+* Now, it is time for filling in missing data
+
+Firstly, by filling in the missing data by the median (for LotFrontage):
+
+Since variable LotFrontage is the distance from house to street and it is a numeric variable which we can add with the median.
+```{r}
+# adding median to the variable LotFrontage (filling data)
+all$LotFrontage[is.na(all$LotFrontage)] <- median(all$LotFrontage, na.rm = T)
+```
+
+
+### Manually filling missing values{-}
+
+Secondly, filling in the missing data by its corresponding "None" (for MasVnrType):
+
+Since variable _MasVnrType_ represents the Exterior Wall Decoration Material, and this variable should have little effect on the price. Thus, I replaced the NA in MasVnrType by its own value, "None".
+```{r}
+# Fill with None
+all[["MasVnrType"]][is.na(all[["MasVnrType"]])] <- "None"
+```
+
+Thirdly, variable _LotFrontage_ house to street distance
+
+This is a numeric variable that we add with the median Median.
+
+```{r}
+# Fill with median
+all$LotFrontage[is.na(all$LotFrontage)] <- median(all$LotFrontage, na.rm = T)
+```
+
+Four, filling in the missing data which is "NA" values by "0" (for MasVnrArea):
+
+Since variable MasVnrArea represents Area of exterior wall decoration material, and these missing values related to their "NA" value in MasVnrType, thus, "NA" value in MasVnrArea should be replaced with $0$.
+```{r}
+# Fill with zero
+all[["MasVnrArea"]][is.na(all[["MasVnrArea"]])] <- 0
+```
+
+Five, get rid of data that has no distinction:
+
+For the variable Utilities which has no distinction, so we discarded directly which means it is set to be "Null" value. 
+```{r}
+# Set Utilities to "Null"
+all$Utilities <- NULL
+```
+
+Six, for vairables, which are missing due to the none relationship with facility and they are all numeric, are replaced by $0$ . From the dataset, we can see that these variables are _BsmtFullBath_,  _BsmtHalfBath_, _BsmtFinSF1_, _BsmtFinSF2_, _BsmtUnfSF_, _TotalBsmtSF_, _GarageCars_, _GarageArea_. 
+```{r}
+# Fill with 0 
+Param0 <- c("BsmtFullBath","BsmtHalfBath","BsmtFinSF1","BsmtFinSF2","BsmtUnfSF","TotalBsmtSF","GarageCars","GarageArea")
+for (x in Param0 ){   
+  all[[x]][is.na(all[[x]])] <- 0
+}
+```
+
+Seven, among variables _MSZoning_, _Functional_, _Exterior1st_, _Exterior2nd_, _KitchenQual_, _Electrical_, _SaleType_, they are all factor variables and there are only a few missing values. Thus, they are replaced by the most factors.
+```{r}
+# Supplemented with the highest frequency factor
+Req <- c("MSZoning","Functional","Exterior1st","Exterior2nd","KitchenQual","Electrical","SaleType")
+for (x in Req )    all[[x]][is.na(all[[x]])] <- levels(all[[x]])[which.max(table(all[[x]]))]
+```
+
+
+* Now, let's generate new training & testing datasets.
+
+After a series of missing values, we see the last 75 variables remaining and there is no missing data. Here, I split the dataset into a training set and a testing set by whether _SalePrice_ is NA or not, so that it is prepared for the following model training. 
+```{r}
+# Separate training sets and test sets by whether SalePrice is empty
+training <- all[!is.na(all$SalePrice), ]
+testing <- all[is.na(all$SalePrice), ]
+
+y_train <- training$Saleprice
+train2 <- training %>% dplyr::select(-SalePrice)
+test2 <- testing %>% dplyr::select(-SalePrice)
+train <- as.matrix(train)
+test <- as.matrix(test2)
+```
+
+
+## Evaluation Method & Model Interpretation:{-}
+
+1. KNN Method
+
+2. Linear Regression
+
+3. Subset Selection
+
+4. Shrinkage Methods
+
+5. Generalized Additive Models
+
+6. Regression Trees
+
+7. Bagging
+
+8. Random Forest
+
+9. Boosting
+
+*Before starting the evaluation, let make some funcitons for transfering, such as transfering data type character to factor, evaluation results, and pre pocessing*
+
+### Basic functions that are needed:
+```{r}
+change_char_to_factor <- function(df){
+    for(col in names(df)){
+        if(class(df[, col]) == "character" ){
+            if(sum(is.na(df[,col])) == 0 ){
+                df[, col] <- as.factor(df[, col])
+            } else {
+                df[, col] <- NULL
+            }
+        }
+    }
+    return (df)
+}
+
+evalute_model <- function(model, data, y){
+    prediction <- predict(model, data)
+    pred_df <- data.frame(obs = y, pred=prediction)
+    return (pred_df)
+}
+
+pre_process <- function(df, method){
+    pre_model <- preProcess(df, method = method) 
+    pre_data <- predict(pre_model, df)
+    
+    return (pre_data)
+}
+```
+
+### 1. KNN Method{-}
+```{r}
+set.seed(781)
+train_control <- trainControl(method="cv", number = 15)
+my_Folds <- createFolds(training, k = 1)
+my_Control <- trainControl(verboseIter = FALSE, index = my_Folds)
+set.seed(1)
+knn <- train(SalePrice ~ ., training, method = "knn", trControl = train_control)
+knn
+plot(knn)
+knn_pred <- predict(knn,testing)
+soln<- data.frame(Id = testing$Id, SalePrice = knn_pred)
+write.csv(soln,"Price+KNN.csv",row.names=FALSE)
+```
+```{r}
+# CV error
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace = T)
+cv.errors <- rep(NA, k)
+
+for (j in 1:k){
+  best_temp <- knn
+  pred <- predict(best_temp, training[folds==j,])
+  cv.errors[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+
+cv.error <- mean(cv.errors)
+cv.error
+```
+
+
+* From the table process and the plot that are shown and recommended above, we would take k=5 for KNN method and it will yeild a nice result. 
+
+* After submitting the price prediction result for KNN method, the score for that in Kaggle is 0.26118. As we see, the score is quite high, therefore it might be not a good idea to choose KNN method as the final model selection. 
+
+### 2. Linear Regression{-}
+```{r}
+# Basic linesr model (simplest model, adding all terms together)
+lm_fit <- lm(SalePrice ~ LotArea + Neighborhood + Condition1 + Condition2 + BldgType + HouseStyle + YearBuilt + YearRemodAdd + MoSold + YrSold + ExterQual + ExterCond, training)
+
+summary(lm_fit)
+
+```
+
+Below, it is tried to remove one predictor at a time and observed its corresponding p-value, so that all variables in the linear forumula are related to the predictor, SalePrice:
+```{r}
+# second linear model (get rid of variables that are non statistical significant)
+lm1 <- lm(SalePrice ~ LotArea + Neighborhood + Condition1 + Condition2 + BldgType + HouseStyle + YearBuilt + YearRemodAdd + YrSold + ExterQual, training)
+
+summary(lm1)
+
+# liner model prediction 
+lm.pred <- predict(lm1, testing)
+
+# First try (for linear model): write out prediction and save in a csv file
+temp<- data.frame(Id = testing$Id, SalePrice = lm.pred)
+write.csv(temp, file = "Price+Linear_Regression.csv", row.names = FALSE)
+
+
+par(mfrow=c(2,2))
+plot(lm1)
+```
+
+* My first try on linear regression model (which is simply removing variables that are non-statistical significant) yields a Kaggle score of 0.22357. It performs better than the KNN method, but the score is still quite high. So, again, it might be not a good idea to choose this method. 
+
+
+Now, let's try to improve the linear model little bit (second try).
+```{r}
+# advanced linear model
+lm_adv <- lm(log(SalePrice) ~ OverallQual + YearRemodAdd + X1stFlrSF + GrLivArea + Fireplaces + GarageArea + MSSubClass + MSZoning + Neighborhood + ExterQual + BsmtQual + BsmtFinType1 + KitchenQual + HouseStyle, training)
+
+summary(lm_adv)
+
+par(mfrow=c(2,2))
+plot(lm_adv)
+
+# advance linear model prediction
+lm.pred.adv <- predict(lm_adv, testing)
+
+# write csv.
+res <- data.frame(Id = testing$Id, SalePrice = exp(lm.pred.adv))
+write.csv(res, file = "Price+Advanced_linear.csv", row.names = FALSE)
+```
+```{r}
+# cv error for linear regression
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace = T)
+cv.errors <- rep(NA, k)
+
+for (j in 1:k){
+  best_temp <- lm_adv
+  pred <- predict(best_temp, training[folds==j,])
+  cv.errors[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.error <- mean(cv.errors)
+cv.error
+```
+
+* My second try on linear regression model (which I adjusted some of the predictors and take the log of the formula) improves a better kaggle score of 0.15133. It performs better than my first try on linear model. 
+
+
+### 3.Subset Selection{-}
+
+**Below is a function for getting the best size for subset selection method**
+```{r}
+predict.regsubsets <- function(object, newdata, id,...){
+  form <- as.formula(object$call[[2]])
+  mat <- model.matrix(form, newdata)
+  coefi <- coef(object, id=id)
+  xvars <- names(coefi)
+  mat[,xvars]%*%coefi
+}
+```
+
+```{r}
+set.seed(1)
+best_fit <- regsubsets(SalePrice~., data=training, method ='forward', nvmax=35)
+best_summary <- summary(best_fit)
+best_no <- which.max(best_summary$adjr2)
+# par(mfrow=c(2,2))
+# plot(best_summary$cp, xlab='No.Vars', ylab='c_p', type='l')
+# points(which.min(best_summary$cp), best_summary$cp[which.min(best_summary$cp)], col='red', cex=2, pch=19)
+# plot(best_summary$bic, xlab='No.Vars', ylab='bic', type='l')
+# points(which.min(best_summary$bic), best_summary$cp[which.min(best_summary$bic)], col='red', cex=2, pch=19)
+# plot(best_summary$adjr2, xlab='No.Vars', ylab='adjr2', type='l')
+# points(which.max(best_summary$adjr2), best_summary$cp[which.max(best_summary$adjr2)], col='red', cex=2, pch=19)
+```
+
+
+_forward selection:_
+
+In Forward Selection, we combine all kinds of possibilities of variables, ranging from null model to full model. Choosing the best one using CV estimates, AIC, BIC, etc. (Smallest RSS, largest R square)
+```{r}
+empty <- lm(log(SalePrice)~1, data=training)
+full <- lm(log(SalePrice)~ .-Id , data=training) 
+
+set.seed(1234)
+# Forward Stepwise
+lm.for <- step(empty, scope=list(lower=empty, upper=full), direction="forward")
+
+# Prediction
+summary(lm.for)
+lm.pred <- predict(lm.for,testing)
+res <- data.frame(Id = testing$Id, SalePrice = exp(lm.pred))
+write.csv(res, file = "Price+Forward_Step.csv", row.names = FALSE)
+``` 
+
+```{r}
+# CV Error for forward subset selection
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace = T)
+cv.errors <- rep(NA, k)
+
+for (j in 1:k){
+  best_temp <- regsubsets(SalePrice~., data=training[folds!=j,], nvmax=35, method="forward")
+  pred <- predict.regsubsets(best_temp, training[folds==j,], id=best_no)
+  cv.errors[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.error <- mean(cv.errors)
+cv.error
+```
+
+
+
+* By doing the forward subset selection, the Kaggle score is 0.13163. 
+
+
+_backward selection:_
+
+In Backward Selection, it goes from Full model and removes variables which are least statistically significant. 
+```{r}
+emptyb <- lm(log(SalePrice)~1, data=training)
+fullb <- lm(log(SalePrice)~ .-Id , data=training) 
+set.seed(1234)
+
+## Forward Stepwise
+lm.forb <- step(fullb, scope=list(lower=fullb, upper=emptyb), direction="backward")
+lm.forb
+
+## Check Result
+summary(lm.forb)
+lm.pred <- predict(lm.forb,testing)
+res <- data.frame(Id = testing$Id, SalePrice = exp(lm.pred))
+write.csv(res, file = "Price+Backward_Step.csv", row.names = FALSE)
+```
+
+```{r}
+# CV Error for Backward subset selection
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace = T)
+cv.errors <- rep(NA, k)
+
+for (j in 1:k){
+  best_temp <- regsubsets(SalePrice~., data=training[folds!=j,], nvmax=35, method="backward")
+  pred <- predict.regsubsets(best_temp, training[folds==j,], id=best_no)
+  cv.errors[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.error <- mean(cv.errors)
+cv.error
+```
+
+
+
+* By doing the backward subset selection, the Kaggle score is 0.13624.
+
+
+### 4. Shrinkage Methods{-}
+
+_Lasso_
+```{r}
+LASSO_formula <- as.formula(log(SalePrice)~ .-Id )
+x <- model.matrix(LASSO_formula, training)
+y <- log(training$SalePrice)
+set.seed(1234)
+
+lm.lasso <- cv.glmnet(x, y, alpha=1)  # cv error
+lm.lasso
+
+plot(lm.lasso)
+testing$SalePrice <- 1
+test_x <- model.matrix(LASSO_formula, testing)
+lasso.pred <- predict(lm.lasso, newx = test_x, s = "lambda.min")
+res <- data.frame(Id = testing$Id, SalePrice = exp(lasso.pred))
+write.csv(res, file = "Price+Lasso.csv", row.names = FALSE)
+```
+
+* The kaggle score for lasso method is 0.13157. So far, this is the best result I got. Now, let see how well does ridge regression perform. 
+
+
+_Ridge Regression_
+```{r}
+ridge_formula <- as.formula(log(SalePrice)~.)
+
+x <- model.matrix(ridge_formula,training)
+y <- log(training$SalePrice)
+
+set.seed(1234)
+cv.ridge <- cv.glmnet(x,y,alpha = 0) #cv error
+cv.ridge
+plot(cv.ridge)
+
+testing$SalePrice <- 1
+ridge.test.x <- model.matrix(ridge_formula, testing)
+ridge.pred <- predict(cv.ridge,newx = ridge.test.x, s = "lambda.min")
+
+soln <- data.frame(Id = testing$Id, SalePrice = exp(ridge.pred))
+write.csv(soln, file = "Price+Ridge.csv", row.names = FALSE)
+```
+
+* The kaggle score of Ridge Regression is 0.13790. That performs slightly worse than the Lasso method. 
+
+### 5. Generalized Additive Models{-}
+
+```{r}
+library(mgcv)
+gam.fit <- gam(log(SalePrice) ~ s(OverallQual) + s(GrLivArea) 
+              + s(TotalBsmtSF) + s(GarageArea), 
+              data = training)
+par(mfrow = c(2, 2))
+plot(gam.fit, se = T, col = "red")
+gam.pred <- predict(gam.fit, testing)
+write.csv(exp(gam.pred),"Price+GAM.csv")
+
+# CV Error for GAM
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace=T)
+cv.error <- rep(NA,k)
+
+for (j in 1:k){
+  best_temp <- gam.fit
+  pred <- predict(best_temp, training[folds==j,])
+  cv.error[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.errors <- mean(cv.error)
+cv.errors
+```
+
+```{r}
+knitr::include_graphics("gam.png")
+```
+
+* By submitting the GAM model prediction to Kaggle, the score is 0.16986
+
+
+### 6. Regression Trees{-}
+
+```{r Regression Tree}
+library(tree)
+tree.fit <- tree(log(SalePrice) ~.-Id, data = training)
+summary(tree.fit)
+plot(tree.fit)
+text(tree.fit, pretty = 0)
+
+set.seed(1234)
+tree.cv <- cv.tree(tree.fit, K = 10) # cv error
+tree.cv
+
+par(nfrow = c(1,2))
+plot(tree.cv$k, tree.cv$dev, type = "b")
+plot(tree.cv$size, tree.cv$dev, type = "b")
+best.size <- tree.cv$size[which.min(tree.cv$dev)]
+best.size
+prunetree <- prune.tree(tree.fit, best = best.size)
+par(nfrow = c(1,1))
+plot(prunetree)
+text(prunetree, pretty = 0)
+rtpred <- predict(prunetree, newdata = testing)
+write.csv(exp(rtpred),"Price+Regression_Trees.csv")
+```
+
+```{r}
+knitr::include_graphics("rt.png")
+```
+
+* By submitting the regression trees model prediction to Kaggle, the score is 0.22079
+
+
+### 7. Bagging{-}
+
+```{r bagging}
+library(randomForest)
+house_model <- randomForest(log(SalePrice) ~.-Id, data = training, mtry = 75, 
+                            imprtance = True)
+importance <- importance(house_model)
+varImpPlot(house_model)
+baggingpred <- predict(house_model,testing)
+write.csv(exp(baggingpred),"Price+Bagging.csv")
+```
+```{r}
+# CV Error for Bagging
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace=T)
+cv.error <- rep(NA,k)
+
+for (j in 1:k){
+  best_temp <- house_model
+  pred <- predict(best_temp, training[folds==j,])
+  cv.error[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.errors <- mean(cv.error)
+cv.errors
+```
+
+```{r}
+knitr::include_graphics("bagging.png")
+```
+
+* By submitting the bagging model prediction to Kaggle, the score is 0.14891
+
+
+
+### 8. Random Forest{-}
+
+```{r random forest}
+library(randomForest)
+house_model <- randomForest(log(SalePrice) ~.-Id, data = training, 
+                            mtry = round(sqrt(75)), imprtance = True)
+importance <- importance(house_model)
+varImpPlot(house_model)
+rfpred <- predict(house_model,testing)
+write.csv(exp(rfpred),"Price+Random_Forest.csv")
+```
+```{r}
+# CV Error for Random Forest
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace=T)
+cv.error <- rep(NA,k)
+
+for (j in 1:k){
+  best_temp <- house_model
+  pred <- predict(best_temp, training[folds==j,])
+  cv.error[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.errors <- mean(cv.error)
+cv.errors
+```
+
+```{r}
+knitr::include_graphics("rf.png")
+```
+
+* By submitting the random forest model prediction to Kaggle, the score is 0.14471
+
+
+### 9. Boosting{-}
+
+```{r boosting}
+library(gbm)
+boosting <- gbm(log(SalePrice) ~ .-Id , data = training, 
+                    distribution = "gaussian", n.trees = 1000, shrinkage = 0.01)
+summary(boosting)
+yhat.boost <- predict(boosting, newdata = testing, n.trees = 1000)
+write.csv(exp(yhat.boost), "Price+Boosting.csv")
+```
+
+```{r}
+# CV Error for Boosting
+k <- 10
+set.seed(1)
+folds <- sample(1:k, nrow(training), replace=T)
+cv.error <- rep(NA,k)
+
+for (j in 1:k){
+  best_temp <- boosting
+  pred <- predict(best_temp, training[folds==j,], n.trees = 1000)
+  cv.error[j] <- mean((training$SalePrice[folds==j]-pred)^2)
+}
+cv.errors <- mean(cv.error)
+cv.errors
+```
+
+```{r}
+knitr::include_graphics("boosting.png")
+```
+
+
+* By submitting the boosting model prediction to Kaggle, the score is 0.14403
+
+
+### Exploration: Combination (Lasso+Forward+Boost){-}
+
+* Finally, I combine the lasso, forward, and boost because they got the best results.
+
+```{r}
+lm<- as.data.frame(lm.pred.adv)
+forw <- as.data.frame(lm.pred)
+lasso <- as.data.frame(lasso.pred)
+
+df <- data.frame(Id = testing$Id, 
+                 SalePrice =  0.45 * exp(lasso$`1`) + 0.35 * exp(forw$lm.pred) + 0.2 * exp(yhat.boost))
+write.csv(df, "Price+Combination.csv", row.names = FALSE)
+```
+
+* By submitting the combination models to Kaggle, the score is 0.12659
+
+
+## Explain how/why you chose the tuning parameters{-}
+
+* In the package _mgcv_, the function _gam()_, which contains a method called Generalized Cross-validation (GCV). GCV will automatically choose the number of knots for your model so that simplicity is balanced against explanatory power.
+
+* For Lasso method, the function cv.glmnet from the R package glmnet does automatic cross-validation on a grid of $\lambda$ values used for $l_1$-penalized regression problems. In particular, for the lasso. The glmnet package also supports the more general elastic net penalty, which is a combination of $l_1$ and $l_2$ penalization. 
+
+* For lambda in ridge regression, from the plot I made earlier, it is easier to observe that the lambda will perform well when it is in its minimum; also, by looking at the cv.glmnet, we can see the result as well. Moreover, as I mentioned in the previous bullet point, the function cv.glmnet from the R package glmnet does automatic cross-validation on a grid of $\lambda$ values used for $l_1$-penalized regression problems.
+
+* For the rest of the chosen parameters, the reasons why I chosen them are explained in their corresponding model interpretation parts. (I wrote the previous three bullet points here is just for the grader to have a easy time to check all my parts in this final project)
+
+## Before submitting to Kaggle, which method perform the best?{-}
+
+ * By just looking at the CV errors among all the methods, we can see that the lasso, forward subset selection, and boosting perform relatively better than others based on their relatively lower CV errors. Thus, I also made another prediction on combining lasso, forward subset selection, and boost in one model which is shown in the part "Exploration: Combination (Lasso+Forward+Boost)". 
+
+
+## Which Methods Performed the Best and the Worst?{-}
+```{r}
+score.val <- c(0.26118, 0.22357, 0.15133, 0.13163, 0.13624, 0.13157, 0.13790, 0.16986, 0.22079, 0.14891, 0.14471, 0.14403, 0.12659)
+model_name <- c("KNN", "Linear Regression (simple)", "Linear Regression (advance)", "Foreward Subset Selection", "Backward Subset Selection", "Lasso", "Ridge Regression", "GAM", "Regression Tree", "Bagging", "Random Forest", "Boosting", "Combination")
+
+conclu.table <- data.frame(Method=model_name, Kaggle_Score = score.val)
+conclu.table
+```
+
+* From the summary table which has each corresponding method and Kaggle score above, we can see that the Lasso method performs the best and the KNN method performs the worst. Also, I includes the Kaggle scores screenshots for each method in a separate PDF file. 
+
+
+## Discussion on Why the methods perform the best and the worst{-}
+
+* In my opinion, because the shrinking and removing the coefficients can reduce variance without a substantial increase of the bias, this is very useful when we have a small number of observation and a large number of features (in this project is relatively matched). Moreover, the Lasso helps us to increase the model interpretability by eliminating irrelevant variables that are not associated with the response variable; in this way, the overfitting is reduced (which is also applied in this project).
+
+* KNN performs the worst; it might be deal with several reasons: first, the curse of dimensionality which means KNN works well with small number of input variables but as the numbers of variables grow KNN algorithm struggles to predict the output of new data point (in this project, we have a relatively large number of predictors); second, KNN is sensitive in outlier because it simply chose the neighbors based on distance criteria; third, missing value treatment which means kNN inherently has no capability of dealing with missing value problem. 
+
+
+## Key Technical Issues{-}
+One of the things I got into troubles a lot is how the csv files I wrote does not have a matching ID number; also, in the csv files, the columns' names for both "Id" and "SalePrice" are not shown or changed as it should be which led Kaggle have a hard time to recognize my work and give the corresponding score. 
+Another notable issue would be how R gives me an warning/error when I tried to write the cv.fold in boosting model for finding the best size. 
+
+## Conclusiton & Summary{-}
+
+* I’ve processed the data meticulously. However, there are still some details I may enhance. For example, I’ve kept most of the parameters (variables) in data cleaning. However, this may cause overfitting consequences. 
+
+* Lasso, among all advanced models (excluding the combination model), has the best performance, whose result is 0.13157.
+
+* The huge discrepancy in scores between this project and the midterm one is due to the data processing and cleaning. Therefore, what’s noticable is that whatever models you use, data processing always plays one of the most significant role in estimating values.
+
+
+## Discussion of Further Questions{-}
+
+Based on the best score I get, there is definitelly having room to improve my accuracy. In addition, in the process of preprocessing data, I kept lots of variables to go through the evaluation model part which might have a high chance to induce overfitting problem. Moreover, as there are lot of methods can be done to fill with the missing values (there are lots of them and in different types as well); I would try other filling methods for the NA value for further investigation.  
+
+
+
+
+
+
+
+
+
+
