@@ -1,4 +1,3 @@
-# zhishan-li-amanda
 # Categories
 
 Note: credict for each individual projects are quoted in the corresponding reports/presentation slides. 
