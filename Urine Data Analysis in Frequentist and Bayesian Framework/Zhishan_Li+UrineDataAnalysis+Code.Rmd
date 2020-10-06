@@ -1,0 +1,246 @@
+---
+title: "STT465_FinalProject"
+author: "Zhishan Li"
+date: "12/3/2019"
+output: word_document
+---
+
+```{r}
+# import library and see the first 6 rows of urine data
+library(boot)
+library(ggplot2)
+library(GGally)
+library(arm)
+library(coda)
+urine <- boot::urine  # Load data
+head(urine)
+summary(urine)
+
+# Look at help file for more info
+# ?urine
+```
+
+```{r}
+# Remove missing values
+DATA = na.omit(urine)
+dim(DATA)    # Check dimension
+```
+```{r}
+# Look at pairwise scatterplot to see the correlations between variables
+pairs(DATA,main = "Scatterplots Between Variables in Matrix") # Change labels of diagonal
+ggpairs(DATA)
+
+# Histograms for each variable
+par(mfrow=c(2,2))
+hist(DATA$gravity, main="Histogram for Gravity", xlab="Gravity")
+hist(DATA$ph,  main="Histogram for pH", xlab="pH")
+hist(DATA$osmo,  main="Histogram for Osmolarity", xlab="Osmolarity")
+hist(DATA$cond,  main="Histogram for Conductivity", xlab="Conductivity")
+```
+
+```{r}
+# Frequentist regression model(large estimate of regression coefficient)
+# model for including all variables 
+urine.glm <- glm(r ~ gravity + ph + osmo + cond + urea + calc, family = binomial, data = DATA)
+summary(urine.glm)
+coef(urine.glm)
+```
+
+```{r}
+# Remove the predictor that has the highest p-value which is pH
+urine.glm2 <- glm(r ~ gravity+cond+osmo+urea+calc, family = binomial, data = DATA)
+summary(urine.glm2)
+```
+
+```{r}
+urine.glm3 <- glm(r ~ gravity+cond+urea+calc, family = binomial, data = DATA)
+summary(urine.glm3)
+```
+
+
+```{r}
+# Residuals Scatter Plot
+plot(residuals(urine.glm3),xlab="Index",ylab="Residuals",main="Residuals Scatter Plot")
+abline(h=0,lty=2)
+
+plot(fitted(urine.glm3), residuals(urine.glm3))
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(urine.glm3)
+```
+
+```{r}
+# head(fortify(urine.glm2))
+# 
+# resid(urine.glm2) #List of residuals
+# plot(density(resid(urine.glm2))) #A density plot
+# qqnorm(resid(urine.glm2)) # A quantile normal plot - good for checking normality
+# qqline(resid(urine.glm2))
+```
+
+```{r}
+# A function to evaluate the log of the posterior density
+logP=function(y,X,b,b0,varB){
+  Xb=X%*%b
+  theta=exp(Xb)/(1+exp(Xb))
+  logLik=sum( dbinom(x=y,p=theta,size=1,log=T)  )
+  logPrior=sum(  dnorm(x=b,sd=sqrt(varB),mean=b0,log=T))
+  return(logLik+logPrior)
+}
+
+
+logisticRegressionBayes=function(y,X,nIter=70000,V=.02,varB=rep(10000,ncol(X)),b0=rep(0,ncol(X))){
+ 
+  ####### Arguments #######################
+  # y  a vector with 0/1 values
+  # X  incidence matrix fo effects
+  # b0,varB, the prior mean and prior variance bj~N(b0[j],varB[j])
+  # V the variance of the normal distribution used to generate candidates~N(b[i-1],V)
+  # nIter: number of iterations of the sampler
+  # Details: generates samples from the posterior distribution of a logistic regression using a Metropolis algorithm
+  #########################################
+    
+  # A matrix to store samples
+   p=ncol(X)
+   B=matrix(nrow=nIter,ncol=p)
+   colnames(B)=colnames(X)
+ 
+  # A vector to trace acceptancve
+   accept=matrix(nrow=nIter,ncol=p,NA)
+   accept[1,]=TRUE 
+   
+  # Initialize
+   B[1,]=0
+   B[1,1]=log(mean(y)/(1-mean(y)))
+   b=B[1,]
+  for(i in 2:nIter){
+    
+    for(j in 1:p){
+      candidate=b
+      candidate[j]=rnorm(mean=b[j],sd=sqrt(V),n=1)
+ 
+      logP_current=logP(y,X,b0=b0,varB=varB,b=b)
+      logP_candidate=logP(y,X,b0=b0,varB=varB,b=candidate)
+      r=min(1,exp(logP_candidate-logP_current))
+      delta=rbinom(n=1,size=1,p=r)
+   
+      accept[i,j]=delta
+   
+     if(delta==1){ b[j]=candidate[j] }
+    }
+    B[i,]=b
+    if(i%%1000==0){
+      message(" Iteration ",i)
+    }
+ 
+  }
+  
+  return(list(B=B,accept=accept))
+}
+
+Z=as.matrix(model.matrix(~gravity + ph + osmo + cond + urea + calc,data=DATA))[,-1]
+Z=scale(Z,center=T,scale=F)
+samples=logisticRegressionBayes(y=DATA$r,X=cbind(1,Z),nIter=50000)
+#B = samples$B[-(1:5000),]
+#summary(as.mcmc(B))
+
+```
+
+```{r}
+Z1=as.matrix(model.matrix(~gravity + ph + osmo + cond + urea + calc,data=DATA))[,-1]
+Z1=scale(Z1,center=T,scale=F)
+samples_Z1=logisticRegressionBayes(y=DATA$r,X=cbind(1,Z1),nIter=50000)
+B1 = samples_Z1$B[-(1:5000),]
+summary(as.mcmc(B1))
+plot(B1[,1],type="o")
+plot(B1[,2],type="o")
+plot(B1[,3],type="o")
+plot(B1[,4],type="o")
+plot(B1[,5],type="o")
+plot(B1[,6],type="o")
+```
+
+```{r}
+Z2=as.matrix(model.matrix(~ph + cond + urea + calc,data=DATA))[,-1]
+Z2=scale(Z2,center=T,scale=F)
+samples_Z2=logisticRegressionBayes(y=DATA$r,X=cbind(1,Z2),nIter=50000)
+
+B2= samples_Z2$B[-(1:5000),]
+summary(as.mcmc(B2))
+par(mfrow=c(2,2))
+plot(B2[,1], type = 'o')
+plot(B2[,2], type = 'o')
+plot(B2[,3], type = 'o')
+plot(B2[,4], type = 'o')
+
+```
+
+```{r}
+v=c(.1,.001,.0001,.00005)
+result=cbind(rep(rep(NA,4)),NA,NA)
+row.names(result)=v
+colnames(result)=c("acceptance rate","lag-50 correlation","effective size") 
+for(i in 1:length(v)){
+  samples=logisticRegressionBayes(y=DATA$r, X=cbind(1,Z2), nIter = 55000, V= v[i])
+  B=samples$B[-(1:5000),] 
+  result[i,1]=sum(samples$accept)/length(samples$accept) 
+  result[i,2]=autocorr(as.mcmc(B)[,5],lags=50) 
+  result[i,3]=effectiveSize(as.mcmc(B))[5]
+ } 
+result
+```
+
+
+
+```{r}
+bayes.glm1 <- bayesglm(r ~ gravity + ph + osmo + cond + urea + calc, family = binomial, data = DATA)
+summary(bayes.glm1)
+```
+
+
+
+```{r}
+bayes.glm2 <- bayesglm(r ~ gravity + ph + cond + urea + calc, family = binomial, data = DATA)
+summary(bayes.glm2)
+```
+
+```{r}
+bayes.glm3 <- bayesglm(r ~ gravity + cond + urea + calc, family = binomial, data = DATA)
+summary(bayes.glm3)
+```
+
+```{r}
+# compare the two models
+fm <-  exp(predict(urine.glm3))/(1+exp(predict(urine.glm3)))
+bayes <-  exp(predict(bayes.glm3))/(1+exp(predict(bayes.glm3)))
+
+bay0 = 0
+fm0 = 0
+
+for(i in 1:length(DATA$r)){
+  if(fm[i]<0.5 & DATA$r[i]==0){
+    fm0 = fm0 + 1
+  }
+  else if (fm[i]>=0.5 & DATA$r[i]==1){
+    fm0 = fm0 + 1
+  }
+  if(bayes[i]>=0.5 & DATA$r[i]==0){
+    bay0 = bay0 +1
+  }
+  else if(bayes[i]<0.5 & DATA$r[i]==0){
+    bay0 = bay0+1
+  }
+}
+fm0
+bay0
+
+fm_accuracy <- fm0/77
+bayes_accuracy <- bay0/77
+fm_accuracy
+bayes_accuracy
+```
+
+
